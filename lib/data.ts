@@ -61,10 +61,10 @@ export const bandMembers: BandMember[] = [
 export type BandVideo = { id: string; title: string; note: string };
 
 export const bandVideos: BandVideo[] = [
-  { id: "MZIJ2vFxu9Y", title: "Choose me", note: "Una puerta abierta al sonido BAND-MAID." },
-  { id: "xmxEuQXTHUU", title: "DOMINATION", note: "Riffs al frente. La mirada puesta en el mundo." },
-  { id: "ZpAYnVJX9CY", title: "DICE", note: "Cambios inesperados y energía sin pausa." },
-  { id: "BWN6iOFjm9U", title: "Sense", note: "Una melodía que crece hasta llenar el escenario." },
+  { id: "yfORoQIqB3E", title: "HATE?", note: "HATE? Official Live Video from 10TH ANNIVERSARY TOUR FINAL in YOKOHAMA ARENA (Nov. 26,2023)" },
+  { id: "dHKn6y2a5tg", title: "Ready to Rock / Live at CENTRAL26", note: "Performance footage from the urban music festival CENTRAL26, held in Yokohama in April, available for a limited time only." },
+  { id: "FHpuEqMAcDg", title: "FREEDOM ", note: "Freedom OKYU-JI (live) video from WORLD DOMINATION TOUR 【進化 at LINE CUBE SHIBUYA." },
+  { id: "oWQpbAmfZLE", title: "WITHOUT HOLDING BACK", note: "Official Live Video from BAND-MAID TOUR 2025 FINAL TOKYO GARDEN THEATER" },
 ];
 
 export const categoryLabels: Record<PostCategory | "all", string> = {
