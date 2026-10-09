@@ -65,6 +65,12 @@ export function Turnstile({ action, onToken }: TurnstileProps) {
     }
   }, [action, siteKey]);
 
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.turnstile) {
+      renderWidget();
+    }
+  }, [renderWidget]);
+
   const retryWidget = useCallback(() => {
     if (!window.turnstile) {
       setWidgetState("script-error");
