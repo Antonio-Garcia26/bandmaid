@@ -6,6 +6,7 @@ import { cookieOptions, SESSION_TTL_MS } from "@/lib/security/mutation";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
 import { jsonError, pendingResponse } from "@/lib/security/responses";
 import { validateMutation } from "@/lib/security/mutation";
+import { verifyTextCaptcha } from "@/lib/security/captcha";
 import { verifyTurnstile } from "@/lib/security/turnstile";
 
 const SESSION_TTL_SECONDS = SESSION_TTL_MS / 1000;
@@ -28,11 +29,39 @@ export async function POST(request: NextRequest) {
     return jsonError("El correo o la contraseña no son válidos.", 400, "INVALID_FIELDS");
   }
 
-  const turnstile = await verifyTurnstile(body.turnstileToken, "login", request);
-  if (turnstile === "unavailable") return pendingResponse("Cloudflare Turnstile");
-  if (turnstile === "invalid") return jsonError("No se pudo verificar que eres una persona.", 400, "TURNSTILE_REJECTED");
+  // Verificación estricta del CAPTCHA de texto borroso contra ataques automatizados y fuerza bruta
+  const captchaVerification = verifyTextCaptcha(body.captchaToken, body.captchaAnswer);
+  if (!captchaVerification.success) {
+    if (captchaVerification.code === "CAPTCHA_EXPIRED") {
+      return jsonError("El código de seguridad ha expirado. Recarga el código para continuar.", 400, "CAPTCHA_EXPIRED");
+    }
+    if (captchaVerification.code === "CAPTCHA_REPLAYED") {
+      return jsonError("Este código ya fue procesado. Recarga la imagen para obtener uno nuevo.", 400, "CAPTCHA_REPLAYED");
+    }
+    return jsonError("El texto introducido no coincide con la imagen. Inténtalo de nuevo.", 400, "CAPTCHA_INVALID");
+  }
+
+  // Si Turnstile está presente y configurado, se valida adicionalmente
+  if (typeof body.turnstileToken === "string" && body.turnstileToken.trim().length > 0) {
+    const turnstile = await verifyTurnstile(body.turnstileToken, "login", request);
+    if (turnstile === "invalid") return jsonError("No se pudo verificar que eres una persona.", 400, "TURNSTILE_REJECTED");
+  }
 
   if (!getFirebaseAdmin() || !configuredValue("NEXT_PUBLIC_FIREBASE_API_KEY")) {
+    if (process.env.NODE_ENV !== "production") {
+      // Modo de desarrollo: permite probar la validación del CAPTCHA localmente
+      const displayName = email.split("@")[0] || "Fan Tester";
+      return NextResponse.json(
+        {
+          user: toFanUser({
+            uid: "dev-local-user-id",
+            email,
+            displayName,
+          }),
+        },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
     return pendingResponse("Firebase Authentication");
   }
 

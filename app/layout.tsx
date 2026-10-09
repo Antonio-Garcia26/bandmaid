@@ -18,7 +18,11 @@ export const metadata: Metadata = {
   description: "Una comunidad escolar no oficial para fans de BAND-MAID: conoce a la banda, descubre sus videos y comparte tu pasión por su música.",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
     <html
       lang="es"

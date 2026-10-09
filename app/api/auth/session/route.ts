@@ -10,8 +10,9 @@ export async function GET(request: NextRequest) {
   if (apiGuard) return apiGuard;
   const services = getFirebaseAdmin();
   const user = services ? await getSessionUser(request) : null;
+  const configured = Boolean(services) || process.env.NODE_ENV !== "production";
   return Response.json(
-    { user, configured: Boolean(services) },
+    { user, configured, isDevMode: !services && process.env.NODE_ENV !== "production" },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

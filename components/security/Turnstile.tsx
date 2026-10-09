@@ -67,7 +67,7 @@ export function Turnstile({ action, onToken }: TurnstileProps) {
 
   useEffect(() => {
     if (typeof window !== "undefined" && window.turnstile) {
-      renderWidget();
+      queueMicrotask(renderWidget);
     }
   }, [renderWidget]);
 

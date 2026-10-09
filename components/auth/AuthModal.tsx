@@ -5,6 +5,7 @@ import { useRef, useState, type FormEvent } from "react";
 import { ApiError, mutateJson } from "@/lib/api-client";
 import { useAuth } from "@/components/auth/AuthContext";
 import { Turnstile } from "@/components/security/Turnstile";
+import { TextCaptcha, type CaptchaValue } from "@/components/security/TextCaptcha";
 import { Dialog } from "@/components/ui/Dialog";
 import type { FanUser } from "@/lib/types";
 
@@ -21,6 +22,8 @@ export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalPro
   const [showPassword, setShowPassword] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileAttempt, setTurnstileAttempt] = useState(0);
+  const [captchaValue, setCaptchaValue] = useState<CaptchaValue>({ token: "", answer: "", isFilled: false });
+  const [captchaRefreshTrigger, setCaptchaRefreshTrigger] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const honeypotRef = useRef<HTMLInputElement>(null);
@@ -34,12 +37,18 @@ export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalPro
     if (nextMode === mode) return;
     setMode(nextMode);
     setTurnstileToken("");
+    setCaptchaRefreshTrigger((prev) => prev + 1);
   }
+
+  const isSubmitDisabled =
+    submitting ||
+    auth.configured === false ||
+    !captchaValue.isFilled;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
-    if (!infrastructureReady || !turnstileToken || submitting) return;
+    if (isSubmitDisabled) return;
 
     setSubmitting(true);
     try {
@@ -48,13 +57,16 @@ export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalPro
         email: email.trim(),
         password,
         website: honeypotRef.current?.value ?? "",
-        turnstileToken,
+        turnstileToken: turnstileToken || undefined,
+        captchaToken: captchaValue.token,
+        captchaAnswer: captchaValue.answer,
       });
       auth.acceptUser(response.user);
       setPassword("");
       onClose();
     } catch (error) {
       setFormError(error instanceof ApiError ? error.message : "No se pudo conectar. Revisa tu conexión e inténtalo de nuevo.");
+      setCaptchaRefreshTrigger((prev) => prev + 1);
     } finally {
       setTurnstileToken("");
       setTurnstileAttempt((attempt) => attempt + 1);
@@ -111,12 +123,24 @@ export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalPro
         </label>
         <input ref={honeypotRef} className="honeypot-field" name="website" type="text" autoComplete="off" tabIndex={-1} aria-hidden="true" />
 
-        <div className="turnstile-space">
-        {open && <Turnstile key={`${mode}-${turnstileAttempt}`} action={mode} onToken={setTurnstileToken} />}
+        <div className="auth-challenge-section">
+          {open && (
+            <TextCaptcha
+              key={mode}
+              onChange={setCaptchaValue}
+              disabled={submitting}
+              refreshTrigger={captchaRefreshTrigger}
+            />
+          )}
+          {infrastructureReady && (
+            <div className="turnstile-space">
+              {open && <Turnstile key={`${mode}-${turnstileAttempt}`} action={mode} onToken={setTurnstileToken} />}
+            </div>
+          )}
         </div>
         {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
 
-        <button className="button button-red auth-submit" type="submit" disabled={!infrastructureReady || !turnstileToken || submitting}>
+        <button className="button button-red auth-submit" type="submit" disabled={isSubmitDisabled}>
           {submitting ? "Un momento…" : mode === "register" ? "Crear mi cuenta" : "Entrar a la comunidad"}
         </button>
         <p className="form-footnote">Tu cuenta es solo para esta comunidad de fans.</p>

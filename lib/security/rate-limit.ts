@@ -17,7 +17,7 @@ const globalState = globalThis as RateLimitGlobal;
 const localWindow = (globalState.__bandmaidRateLimitWindow ??= { values: new Map() });
 const upstashLimiters = new Map<string, Ratelimit>();
 
-function localLimit(key: string): RateLimitResult {
+function localLimit(key: string, maxRequests = 5): RateLimitResult {
   const now = Date.now();
   for (const [candidate, entry] of localWindow.values) {
     if (entry.resetAt <= now) localWindow.values.delete(candidate);
@@ -34,42 +34,43 @@ function localLimit(key: string): RateLimitResult {
     localWindow.values.set(key, { count: 1, resetAt: now + 60_000 });
     return { allowed: true, retryAfter: 0 };
   }
-  if (current.count >= 5) return { allowed: false, retryAfter: Math.max(1, Math.ceil((current.resetAt - now) / 1000)) };
+  if (current.count >= maxRequests) return { allowed: false, retryAfter: Math.max(1, Math.ceil((current.resetAt - now) / 1000)) };
   current.count += 1;
   return { allowed: true, retryAfter: 0 };
 }
 
-function getUpstashLimiter(scope: string): Ratelimit | null {
+function getUpstashLimiter(scope: string, maxRequests = 5): Ratelimit | null {
   const url = configuredValue("UPSTASH_REDIS_REST_URL");
   const token = configuredValue("UPSTASH_REDIS_REST_TOKEN");
   if (!url || !token) return null;
-  const existing = upstashLimiters.get(scope);
+  const limiterKey = `${scope}:${maxRequests}`;
+  const existing = upstashLimiters.get(limiterKey);
   if (existing) return existing;
 
   try {
     const redis = new Redis({ url, token });
     const limiter = new Ratelimit({
       redis,
-      limiter: Ratelimit.slidingWindow(5, "60 s"),
+      limiter: Ratelimit.slidingWindow(maxRequests, "60 s"),
       prefix: `bandmaid:ratelimit:${scope}`,
       analytics: false,
     });
-    upstashLimiters.set(scope, limiter);
+    upstashLimiters.set(limiterKey, limiter);
     return limiter;
   } catch {
     return null;
   }
 }
 
-async function checkLimit(scope: string, subject: string): Promise<RateLimitResult | ProductionCheck> {
+async function checkLimit(scope: string, subject: string, maxRequests = 5): Promise<RateLimitResult | ProductionCheck> {
   const key = `${scope}:${subject}`;
-  if (process.env.NODE_ENV !== "production") return localLimit(key);
+  if (process.env.NODE_ENV !== "production") return localLimit(key, maxRequests);
 
   if (!configuredValue("UPSTASH_REDIS_REST_URL") || !configuredValue("UPSTASH_REDIS_REST_TOKEN")) {
     return { pending: true };
   }
 
-  const limiter = getUpstashLimiter(scope);
+  const limiter = getUpstashLimiter(scope, maxRequests);
   if (!limiter) return { unavailable: true };
   try {
     const result = await limiter.limit(subject);
@@ -88,11 +89,12 @@ export async function enforceRateLimit(
   request: NextRequest,
   scope: string,
   uid?: string,
-  options: { includeIp?: boolean } = {},
+  options: { includeIp?: boolean; maxRequests?: number } = {},
 ): Promise<Response | null> {
+  const maxRequests = options.maxRequests ?? 5;
   if (options.includeIp !== false) {
     const ip = trustedClientIp(request);
-    const ipResult = await checkLimit(`${scope}:ip`, ip);
+    const ipResult = await checkLimit(`${scope}:ip`, ip, maxRequests);
     if ("pending" in ipResult) return pendingResponse("Upstash Redis para limitar solicitudes");
     if ("unavailable" in ipResult) return jsonError("El control de solicitudes no está disponible.", 503, "RATE_LIMIT_UNAVAILABLE");
     const ipLimit = "result" in ipResult ? ipResult.result : ipResult;
@@ -104,7 +106,7 @@ export async function enforceRateLimit(
   }
 
   if (uid) {
-    const userResult = await checkLimit(`${scope}:uid`, uid);
+    const userResult = await checkLimit(`${scope}:uid`, uid, maxRequests);
     if ("pending" in userResult) return pendingResponse("Upstash Redis para limitar solicitudes");
     if ("unavailable" in userResult) return jsonError("El control de solicitudes no está disponible.", 503, "RATE_LIMIT_UNAVAILABLE");
     const userLimit = "result" in userResult ? userResult.result : userResult;
