@@ -8,11 +8,22 @@ Desde esta carpeta:
 
 ```powershell
 python -m pip install -r requirements.txt
-python main.py --browser edge
-python main.py --browser edge --query "Miku" --limit 1 --screenshot
+python main.py
 ```
 
-El navegador correspondiente debe estar instalado. Selenium Manager gestiona el controlador cuando sea necesario.
+El menú de la terminal ofrece estas opciones:
+
+1. **Extraer información de la web (scraping):** abre la página pública, extrae las fichas de `#miembros` y guarda el CSV. Los parámetros de scraping siguen disponibles, por ejemplo:
+
+   ```powershell
+   python main.py --browser edge --query "Miku" --limit 1 --screenshot
+   ```
+
+2. **Probar el registro sin CAPTCHA:** hace primero un GET de CSRF y después un único POST de registro omitiendo los datos del CAPTCHA; se espera que el servidor rechace el intento.
+3. **Probar el límite de solicitudes (rate limit):** envía como máximo seis POST secuenciales de inicio de sesión y se detiene en la primera respuesta HTTP 429.
+0. **Salir** sin iniciar una operación.
+
+El navegador correspondiente debe estar instalado. Selenium Manager gestiona el controlador cuando sea necesario. `python main.py --help` muestra las opciones de línea de comandos, incluido `--browser` (`edge` por omisión o `chrome`).
 
 ## Flujo de trabajo
 
@@ -22,4 +33,6 @@ El navegador correspondiente debe estar instalado. Selenium Manager gestiona el 
 - `--query` busca texto localmente, sin distinguir mayúsculas; `--offset` y `--limit` permiten recorrer una porción de la tabla.
 - Guarda cada resultado en un CSV con nombre único dentro de `salida/`; `--screenshot` guarda una captura PNG de la página visible en la misma carpeta.
 
-El script no inicia sesión ni envía formularios. Si detecta CAPTCHA, acceso denegado o una verificación humana, pausa para revisión manual y detiene la extracción; no intenta resolver ni sortear el desafío.
+El scraping de la opción 1 no inicia sesión ni envía formularios. Si detecta CAPTCHA, acceso denegado o una verificación humana, pausa para revisión manual y detiene la extracción; no intenta resolver ni sortear el desafío.
+
+Las pruebas de seguridad de las opciones 2 y 3 solo se ejecutan contra `https://bandmaid-abcd123.vercel.app/`. El destino está fijado en el programa: no se puede cambiar a localhost ni configurar otra URL.

@@ -12,6 +12,7 @@ if sys.stdout and hasattr(sys.stdout, "reconfigure"):
 from data_processor import guardar_captura, guardar_resultados, procesar_datos
 from driver_manager import cerrar_driver, iniciar_driver
 from scraper import HumanVerificationDetected, extraer_miembros
+from security_tests import run_public_security_test
 
 
 def build_parser():
@@ -62,11 +63,7 @@ def _pause_for_review():
         print("No hay entrada interactiva; se detiene la extracción.")
 
 
-def main(argv=None):
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    _validate_args(parser, args)
-
+def _run_scraping(args):
     driver = None
     records = []
     pages_processed = 0
@@ -114,6 +111,56 @@ def main(argv=None):
     output_path = guardar_resultados(df)
     print(f"\nCSV guardado en: {output_path}")
     return 0
+
+
+def _run_security_test(args, mode):
+    driver = None
+    try:
+        driver, _ = iniciar_driver(args.browser)
+        run_public_security_test(driver, mode)
+    except Exception as error:
+        print(f"No se pudo completar la prueba ({type(error).__name__}): {error}")
+        return 1
+    finally:
+        cerrar_driver(driver)
+    return 0
+
+
+def _show_menu():
+    while True:
+        print("\n=== Herramientas Band-Maid ===")
+        print("1. Extraer información de la web (scraping)")
+        print("2. Intentar registro sin CAPTCHA (se espera que falle)")
+        print("3. Enviar hasta seis solicitudes para probar el rate limit")
+        print("0. Salir")
+        try:
+            choice = input("Seleccione una opción: ").strip()
+        except EOFError:
+            print("\nNo se recibió una opción; saliendo.")
+            return "0"
+        if choice in {"0", "1", "2", "3"}:
+            return choice
+        print("Opción no válida. Intente de nuevo.")
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    _validate_args(parser, args)
+
+    choice = _show_menu()
+    if choice == "0":
+        print("Saliendo.")
+        return 0
+    if choice == "1":
+        return _run_scraping(args)
+    if choice == "2":
+        return _run_security_test(args, "register")
+    if choice == "3":
+        return _run_security_test(args, "rate-limit")
+
+    print("Opción no válida. No se inició ninguna operación.")
+    return 2
 
 
 if __name__ == "__main__":
