@@ -25,6 +25,10 @@ El menú de la terminal ofrece estas opciones:
 
 Al terminar cada operación, el programa vuelve al menú, también si ocurre un error o el servidor rechaza la solicitud de prueba.
 
+## Registro de actividad
+
+Los eventos se guardan en `salida/selenium.log` en UTF-8. Cada línea usa el formato `[PID] [fecha,milisegundos] NIVEL [archivo.py:línea] ==> mensaje`. El archivo se escribe en modo append y rota al alcanzar 5 MB, conservando tres respaldos (`selenium.log.1` a `selenium.log.3`).
+
 El navegador correspondiente debe estar instalado. Selenium Manager gestiona el controlador cuando sea necesario. `python main.py --help` muestra las opciones de línea de comandos, incluido `--browser` (`edge` por omisión o `chrome`).
 
 ## Flujo de trabajo
