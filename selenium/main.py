@@ -148,19 +148,24 @@ def main(argv=None):
     args = parser.parse_args(argv)
     _validate_args(parser, args)
 
-    choice = _show_menu()
-    if choice == "0":
-        print("Saliendo.")
-        return 0
-    if choice == "1":
-        return _run_scraping(args)
-    if choice == "2":
-        return _run_security_test(args, "register")
-    if choice == "3":
-        return _run_security_test(args, "rate-limit")
+    while True:
+        choice = _show_menu()
+        if choice == "0":
+            print("Saliendo.")
+            return 0
 
-    print("Opción no válida. No se inició ninguna operación.")
-    return 2
+        if choice == "1":
+            result = _run_scraping(args)
+        elif choice == "2":
+            result = _run_security_test(args, "register")
+        else:
+            result = _run_security_test(args, "rate-limit")
+
+        if result == 0:
+            print("Operación finalizada correctamente.")
+        else:
+            print(f"La operación terminó con errores (código {result}).")
+        print("Volviendo al menú.")
 
 
 if __name__ == "__main__":

@@ -23,6 +23,8 @@ El menú de la terminal ofrece estas opciones:
 3. **Probar el límite de solicitudes (rate limit):** envía como máximo seis POST secuenciales de inicio de sesión y se detiene en la primera respuesta HTTP 429.
 0. **Salir** sin iniciar una operación.
 
+Al terminar cada operación, el programa vuelve al menú, también si ocurre un error o el servidor rechaza la solicitud de prueba.
+
 El navegador correspondiente debe estar instalado. Selenium Manager gestiona el controlador cuando sea necesario. `python main.py --help` muestra las opciones de línea de comandos, incluido `--browser` (`edge` por omisión o `chrome`).
 
 ## Flujo de trabajo
