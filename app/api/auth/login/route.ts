@@ -9,6 +9,8 @@ import { validateMutation } from "@/lib/security/mutation";
 import { verifyTextCaptcha } from "@/lib/security/captcha";
 import { verifyTurnstile } from "@/lib/security/turnstile";
 
+import { validateHumanInteraction } from "@/lib/security/human-interaction";
+
 const SESSION_TTL_SECONDS = SESSION_TTL_MS / 1000;
 
 export async function POST(request: NextRequest) {
@@ -41,6 +43,10 @@ export async function POST(request: NextRequest) {
     return jsonError("El texto introducido no coincide con la imagen. Inténtalo de nuevo.", 400, "CAPTCHA_INVALID");
   }
 
+  // Verificación de comportamiento humano (cursor, cadencia de teclado, webdriver)
+  const humanCheck = validateHumanInteraction(body.telemetry);
+  if (humanCheck) return humanCheck;
+
   // Si Turnstile está presente y configurado, se valida adicionalmente
   if (typeof body.turnstileToken === "string" && body.turnstileToken.trim().length > 0) {
     const turnstile = await verifyTurnstile(body.turnstileToken, "login", request);
@@ -49,18 +55,21 @@ export async function POST(request: NextRequest) {
 
   if (!getFirebaseAdmin() || !configuredValue("NEXT_PUBLIC_FIREBASE_API_KEY")) {
     if (process.env.NODE_ENV !== "production") {
-      // Modo de desarrollo: permite probar la validación del CAPTCHA localmente
+      // Modo de desarrollo: permite probar la validación del CAPTCHA localmente con sesión válida
       const displayName = email.split("@")[0] || "Fan Tester";
-      return NextResponse.json(
-        {
-          user: toFanUser({
-            uid: "dev-local-user-id",
-            email,
-            displayName,
-          }),
-        },
+      const devUser = toFanUser({
+        uid: "dev-local-user-id",
+        email,
+        displayName,
+      });
+      const response = NextResponse.json(
+        { user: devUser },
         { headers: { "Cache-Control": "no-store" } },
       );
+      const sessionPayload = { uid: "dev-local-user-id", email, displayName };
+      const devSession = `dev-session-${Buffer.from(JSON.stringify(sessionPayload)).toString("base64url")}`;
+      response.cookies.set("bandmaid_session", devSession, cookieOptions(SESSION_TTL_SECONDS));
+      return response;
     }
     return pendingResponse("Firebase Authentication");
   }

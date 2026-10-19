@@ -27,8 +27,21 @@ export function toFanUser(input: {
 
 export async function getSessionUser(request: NextRequest): Promise<FanUser | null> {
   const sessionCookie = request.cookies.get(SESSION_COOKIE)?.value;
+  if (!sessionCookie) return null;
+
   const services = getFirebaseAdmin();
-  if (!sessionCookie || !services) return null;
+  if (!services) {
+    if (process.env.NODE_ENV !== "production" && sessionCookie.startsWith("dev-session-")) {
+      try {
+        const payloadJson = Buffer.from(sessionCookie.replace("dev-session-", ""), "base64url").toString("utf-8");
+        const parsed = JSON.parse(payloadJson) as { uid: string; email?: string; displayName?: string };
+        return toFanUser(parsed);
+      } catch {
+        return toFanUser({ uid: "dev-local-user", displayName: "Fan Tester", email: "fan@bandmaid.local" });
+      }
+    }
+    return null;
+  }
 
   try {
     const decoded = await services.auth.verifySessionCookie(sessionCookie, true);

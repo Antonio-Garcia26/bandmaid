@@ -7,10 +7,15 @@ import { enforceRateLimit } from "@/lib/security/rate-limit";
 import { badRequest, jsonError, pendingResponse } from "@/lib/security/responses";
 import { verifyTurnstile } from "@/lib/security/turnstile";
 import { validateApiRequest } from "@/lib/security/request-guard";
+import { validateHumanInteraction } from "@/lib/security/human-interaction";
+import { examplePosts } from "@/lib/data";
 import type { Post, PostCategory } from "@/lib/types";
 
 const categories = new Set<PostCategory>(["general", "music", "live", "fan-art"]);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+// Almacén en memoria para pruebas en entorno local sin Firestore configurado
+const localDevPosts: Post[] = [...examplePosts];
 
 function postFromData(id: string, data: JsonRecord): Post {
   const author = data.author && typeof data.author === "object" ? (data.author as JsonRecord) : {};
@@ -31,8 +36,14 @@ function postFromData(id: string, data: JsonRecord): Post {
 export async function GET(request: NextRequest) {
   const apiGuard = validateApiRequest(request);
   if (apiGuard) return apiGuard;
+
   const services = getFirebaseAdmin();
-  if (!services) return pendingResponse("Firebase Firestore");
+  if (!services) {
+    if (process.env.NODE_ENV !== "production") {
+      return Response.json({ posts: localDevPosts, configured: true }, { headers: { "Cache-Control": "no-store" } });
+    }
+    return pendingResponse("Firebase Firestore");
+  }
 
   try {
     const snapshot = await services.db.collection("posts").orderBy("createdAt", "desc").limit(50).get();
@@ -54,10 +65,12 @@ export async function POST(request: NextRequest) {
   if ("response" in mutation) return mutation.response;
   const { body } = mutation;
 
+  // 1. Trampa Honeypot
   if (typeof body.website !== "string" || body.website.trim() !== "") {
     return jsonError("No se pudo validar el formulario.", 400, "BOT_REJECTED");
   }
 
+  // 2. Validación de campos
   const id = typeof body.id === "string" ? body.id.trim() : "";
   const title = typeof body.title === "string" ? body.title.trim() : "";
   const content = typeof body.body === "string" ? body.body.trim() : "";
@@ -66,17 +79,42 @@ export async function POST(request: NextRequest) {
     return badRequest("Revisa el título, el contenido y la categoría e inténtalo de nuevo.");
   }
 
-  const services = getFirebaseAdmin();
-  if (!services) return pendingResponse("Firebase Authentication y Firestore");
+  // 3. Verificación de comportamiento humano y telemetría (anti-scraping y anti-bots)
+  const humanCheck = validateHumanInteraction(body.telemetry);
+  if (humanCheck) return humanCheck;
+
+  // 4. Usuario autenticado
   const user = await getSessionUser(request);
   if (!user) return jsonError("Inicia sesión para publicar.", 401, "AUTH_REQUIRED");
 
   const userLimited = await enforceRateLimit(request, "posts-create", user.uid, { includeIp: false });
   if (userLimited) return userLimited;
 
-  const turnstile = await verifyTurnstile(body.turnstileToken, "create-post", request);
-  if (turnstile === "unavailable") return pendingResponse("Cloudflare Turnstile");
-  if (turnstile === "invalid") return jsonError("No se pudo verificar que eres una persona.", 400, "TURNSTILE_REJECTED");
+  // 5. Cloudflare Turnstile (solo si está configurado en el entorno)
+  const turnstileSecret = process.env.TURNSTILE_SECRET_KEY?.trim();
+  if (turnstileSecret && turnstileSecret.toUpperCase() !== "PENDIENDTE") {
+    const turnstile = await verifyTurnstile(body.turnstileToken, "create-post", request);
+    if (turnstile === "invalid") return jsonError("No se pudo verificar que eres una persona.", 400, "TURNSTILE_REJECTED");
+  }
+
+  const services = getFirebaseAdmin();
+  if (!services) {
+    if (process.env.NODE_ENV !== "production") {
+      const createdAt = new Date().toISOString();
+      const newPost: Post = {
+        id,
+        title,
+        body: content,
+        category: category as PostCategory,
+        author: { uid: user.uid, displayName: user.displayName },
+        createdAt,
+        likes: 0,
+      };
+      localDevPosts.unshift(newPost);
+      return NextResponse.json({ post: newPost }, { status: 201, headers: { "Cache-Control": "no-store" } });
+    }
+    return pendingResponse("Firebase Authentication y Firestore");
+  }
 
   const ref = services.db.collection("posts").doc(id);
   try {

@@ -64,24 +64,27 @@ function getUpstashLimiter(scope: string, maxRequests = 5): Ratelimit | null {
 
 async function checkLimit(scope: string, subject: string, maxRequests = 5): Promise<RateLimitResult | ProductionCheck> {
   const key = `${scope}:${subject}`;
-  if (process.env.NODE_ENV !== "production") return localLimit(key, maxRequests);
-
-  if (!configuredValue("UPSTASH_REDIS_REST_URL") || !configuredValue("UPSTASH_REDIS_REST_TOKEN")) {
-    return { pending: true };
+  if (
+    process.env.NODE_ENV !== "production" ||
+    !configuredValue("UPSTASH_REDIS_REST_URL") ||
+    !configuredValue("UPSTASH_REDIS_REST_TOKEN")
+  ) {
+    return localLimit(key, maxRequests);
   }
 
   const limiter = getUpstashLimiter(scope, maxRequests);
-  if (!limiter) return { unavailable: true };
+  if (!limiter) return localLimit(key, maxRequests);
   try {
     const result = await limiter.limit(subject);
-    if (result.reason === "timeout") return { unavailable: true };
-    return { result: {
+    if (result.reason === "timeout") return localLimit(key, maxRequests);
+    return {
+      result: {
         allowed: result.success,
         retryAfter: Math.max(1, Math.ceil((result.reset - Date.now()) / 1000)),
       },
     };
   } catch {
-    return { unavailable: true };
+    return localLimit(key, maxRequests);
   }
 }
 

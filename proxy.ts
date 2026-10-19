@@ -2,7 +2,7 @@ import { isIP } from "node:net";
 import { NextResponse, type NextRequest } from "next/server";
 import { configuredValue, isProduction } from "@/lib/security/config";
 import { trustedClientIp } from "@/lib/security/ip";
-import { validateApiRequest } from "@/lib/security/request-guard";
+import { validateApiRequest, validateUserAgent } from "@/lib/security/request-guard";
 
 const contentSecurityPolicy = [
   "default-src 'self'",
@@ -40,11 +40,19 @@ function deniedIp(request: NextRequest): boolean {
 }
 
 export function proxy(request: NextRequest) {
+  // 1. Bloqueo de IPs denegadas
   if (deniedIp(request)) {
     return addSecurityHeaders(NextResponse.json({ error: "Acceso denegado.", code: "IP_BLOCKED" }, { status: 403 }));
   }
 
-  if (isProduction() && request.nextUrl.pathname.startsWith("/api/")) {
+  // 2. Bloqueo activo de herramientas de scraping y clientes automatizados por User-Agent
+  const userAgentGuard = validateUserAgent(request);
+  if (userAgentGuard) {
+    return addSecurityHeaders(userAgentGuard);
+  }
+
+  // 3. Validación de solicitudes al API (origen, host, secreto WAF)
+  if (request.nextUrl.pathname.startsWith("/api/")) {
     const apiGuard = validateApiRequest(request);
     if (apiGuard) return addSecurityHeaders(apiGuard);
   }
@@ -53,5 +61,8 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: "/:path*",
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|icon.svg|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+  ],
 };
+

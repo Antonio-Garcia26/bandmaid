@@ -10,6 +10,8 @@ import { jsonError, pendingResponse } from "@/lib/security/responses";
 import { validateMutation } from "@/lib/security/mutation";
 import { verifyTurnstile } from "@/lib/security/turnstile";
 
+import { validateHumanInteraction } from "@/lib/security/human-interaction";
+
 const SESSION_TTL_SECONDS = SESSION_TTL_MS / 1000;
 
 export async function POST(request: NextRequest) {
@@ -43,6 +45,10 @@ export async function POST(request: NextRequest) {
     return jsonError("El texto introducido no coincide con la imagen. Inténtalo de nuevo.", 400, "CAPTCHA_INVALID");
   }
 
+  // Verificación de comportamiento humano (movimiento de cursor, cadencia de teclado, webdriver)
+  const humanCheck = validateHumanInteraction(body.telemetry);
+  if (humanCheck) return humanCheck;
+
   // Si Turnstile está presente y configurado, se valida adicionalmente
   if (typeof body.turnstileToken === "string" && body.turnstileToken.trim().length > 0) {
     const turnstile = await verifyTurnstile(body.turnstileToken, "register", request);
@@ -52,17 +58,20 @@ export async function POST(request: NextRequest) {
   const services = getFirebaseAdmin();
   if (!services || !configuredValue("NEXT_PUBLIC_FIREBASE_API_KEY")) {
     if (process.env.NODE_ENV !== "production") {
-      // Modo de desarrollo: permite probar el registro y CAPTCHA localmente
-      return NextResponse.json(
-        {
-          user: toFanUser({
-            uid: "dev-registered-user-id",
-            displayName,
-            email,
-          }),
-        },
+      // Modo de desarrollo: permite probar el registro y CAPTCHA localmente con sesión válida
+      const devUser = toFanUser({
+        uid: "dev-registered-user-id",
+        displayName,
+        email,
+      });
+      const response = NextResponse.json(
+        { user: devUser },
         { headers: { "Cache-Control": "no-store" } },
       );
+      const sessionPayload = { uid: "dev-registered-user-id", email, displayName };
+      const devSession = `dev-session-${Buffer.from(JSON.stringify(sessionPayload)).toString("base64url")}`;
+      response.cookies.set("bandmaid_session", devSession, cookieOptions(SESSION_TTL_SECONDS));
+      return response;
     }
     return pendingResponse("Firebase Authentication y Firestore");
   }

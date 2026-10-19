@@ -156,6 +156,23 @@ img { max-width: 100%; }
 .member-role { margin-top: 6px; color: var(--muted); font-size: 10px; font-weight: 600; }
 .members-caption { display: flex; justify-content: space-between; margin-top: 32px; border-top: 1px solid var(--line); padding-top: 10px; color: var(--muted); font-size: 8px; font-weight: 800; letter-spacing: .16em; }
 
+/* Skeleton diferido para integrantes */
+@keyframes member-shimmer {
+  0% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+  100% { opacity: 0.4; }
+}
+.skeleton-box {
+  animation: member-shimmer 1.8s ease-in-out infinite;
+  background: #16161a;
+}
+.skeleton-line {
+  display: block;
+  animation: member-shimmer 1.8s ease-in-out infinite;
+  background: #24242c;
+  border-radius: 2px;
+}
+
 /* Video room */
 .videos-section { background: #060608; color: #ffffff; border-block: 1px solid #18181b; }
 .videos-heading .section-deck { color: #a1a1aa; }
