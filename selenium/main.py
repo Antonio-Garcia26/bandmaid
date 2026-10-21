@@ -9,11 +9,20 @@ if sys.stdout and hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
-from data_processor import guardar_captura, guardar_resultados, procesar_datos
+from database import consultar_sqlite, contar_registros_sqlite
+from data_processor import (
+    guardar_captura,
+    guardar_resultados,
+    guardar_resultados_oficiales,
+    procesar_datos,
+    procesar_datos_oficiales,
+)
 from driver_manager import cerrar_driver, iniciar_driver
 from logging_config import configure_logging, get_logger
+from official_scraper import extraer_datos_cdmx, extraer_datos_data_gov
 from scraper import HumanVerificationDetected, extraer_miembros
 from security_tests import run_public_security_test
+from site_auditor import ejecutar_auditoria_completa
 
 logger = get_logger(__name__)
 
@@ -44,6 +53,18 @@ def build_parser():
         "--screenshot",
         action="store_true",
         help="guarda una captura PNG de la página visible dentro de salida/",
+    )
+    parser.add_argument(
+        "--portal",
+        choices=("datos_cdmx", "data_gov"),
+        default="datos_cdmx",
+        help="portal oficial para extracción de datos (por omisión: datos_cdmx)",
+    )
+    parser.add_argument(
+        "--pages",
+        type=int,
+        default=2,
+        help="número máximo de páginas a recorrer en el portal oficial",
     )
     return parser
 
@@ -226,12 +247,123 @@ def _run_security_test(args, mode):
     return 0
 
 
+def _run_audit(args):
+    """Ejecuta la inspección comparativa de los 5 sitios web para la Fase 2."""
+    print("\n" + "=" * 60)
+    print("INICIANDO AUDITORÍA COMPARATIVA DE 5 SITIOS (FASE 2)")
+    print("Inspección de robots.txt, cabeceras HTTP, WAF, CAPTCHAs y DOM dinámico...")
+    print("=" * 60)
+    try:
+        ejecutar_auditoria_completa(browser=args.browser)
+        return 0
+    except Exception as error:
+        logger.exception("Error executing full site audit: %s", error)
+        print(f"\nNo se pudo completar la auditoría ({type(error).__name__}): {error}")
+        return 1
+
+
+def _run_official_scraping(args):
+    """Ejecuta la extracción de datos desde el portal oficial seleccionado (Fase 3)."""
+    portal_choice = args.portal or "datos_cdmx"
+    search_query = args.query or ("salud" if portal_choice == "datos_cdmx" else "health")
+    max_pages = args.pages or 2
+
+    print("\n" + "=" * 60)
+    print("EXTRACCIÓN DE DATOS OFICIALES CON SELENIUM (FASE 3)")
+    print(f"Portal objetivo: {portal_choice} | Búsqueda: '{search_query}' | Páginas: {max_pages}")
+    print("=" * 60)
+
+    driver = None
+    records = []
+    challenge_detected = False
+    try:
+        driver, wait = iniciar_driver(args.browser)
+        if portal_choice == "datos_cdmx":
+            records = extraer_datos_cdmx(driver, wait, query=search_query, max_pages=max_pages)
+        else:
+            records = extraer_datos_data_gov(driver, wait, query=search_query, max_pages=max_pages)
+    except HumanVerificationDetected as challenge:
+        records = challenge.records
+        challenge_detected = True
+        logger.warning("Ethical barrier detected during official scraping: %s", challenge)
+        print(f"\nATENCIÓN (Manejo Ético de Barreras): {challenge}")
+        _pause_for_review()
+    except Exception as error:
+        logger.exception("Error in official scraping: %s", error)
+        print(f"\nNo se pudo completar la extracción oficial ({type(error).__name__}): {error}")
+        return 1
+    finally:
+        if args.screenshot and driver is not None:
+            try:
+                guardar_captura(driver)
+            except Exception:
+                pass
+        cerrar_driver(driver)
+
+    if not records:
+        print("\nNo se obtuvieron registros del portal oficial.")
+        return 0
+
+    print(f"\nProcesando y limpiando {len(records)} registros con Pandas...")
+    df = procesar_datos_oficiales(records, query=args.query, offset=args.offset, limit=args.limit)
+
+    print(f"\nRegistros procesados y estructurados: {len(df)}")
+    if challenge_detected:
+        print("(La extracción se pausó preventivamente por desafío de verificación)")
+
+    print("\nVista previa del Dataset Oficial estructurado:")
+    cols_preview = ["title", "organization", "category", "last_updated"]
+    cols_exist = [c for c in cols_preview if c in df.columns]
+    print(df[cols_exist].head(15).to_string(index=False) if not df.empty else "(sin registros)")
+
+    # Guardar en SQLite y CSV
+    try:
+        storage_info = guardar_resultados_oficiales(df, portal_tag=portal_choice)
+        print("\n" + "-" * 60)
+        print("ALMACENAMIENTO PERSISTENTE COMPLETADO:")
+        print(f"  • Base de Datos SQLite: salida/datos_oficiales.db (filas añadidas: {storage_info['sqlite_rows']})")
+        print(f"  • Archivo CSV estructurado: {storage_info['csv_path'].name}")
+        if storage_info.get("excel_path"):
+            print(f"  • Archivo Excel: {storage_info['excel_path'].name}")
+        print("-" * 60)
+    except Exception as error:
+        logger.exception("Could not save official data results: %s", error)
+        print(f"No se pudieron guardar los resultados oficiales ({type(error).__name__}).")
+        return 1
+
+    return 0
+
+
+def _run_db_view():
+    """Consulta y muestra los registros almacenados en la base de datos SQLite."""
+    total = contar_registros_sqlite("datasets_oficiales")
+    total_audit = contar_registros_sqlite("auditoria_sitios")
+    print("\n" + "=" * 60)
+    print("CONSULTA DE BASE DE DATOS SQLITE (salida/datos_oficiales.db)")
+    print(f"Total registros datasets_oficiales: {total} | Total auditorías registradas: {total_audit}")
+    print("=" * 60)
+
+    if total == 0:
+        print("La tabla 'datasets_oficiales' aún no tiene registros.")
+        print("Ejecute la opción 5 para extraer y almacenar datos de un portal oficial.")
+        return 0
+
+    df = consultar_sqlite("datasets_oficiales", limit=15)
+    cols = ["id", "portal", "title", "category", "last_updated"]
+    cols_exist = [c for c in cols if c in df.columns]
+    print(df[cols_exist].to_string(index=False))
+    return 0
+
+
 def _show_menu():
     while True:
-        print("\n=== Herramientas Band-Maid ===")
-        print("1. Extraer información de la web (scraping)")
-        print("2. Intentar registro sin CAPTCHA (se espera que falle)")
-        print("3. Enviar hasta seis solicitudes para probar el rate limit")
+        print("\n=== Menú de Automatización, Seguridad y Extracción ===")
+        print("1. Extraer fichas de Band-Maid (Scraping local/propio)")
+        print("2. Intentar registro sin CAPTCHA (Seguridad Band-Maid)")
+        print("3. Enviar solicitudes para probar rate limit (Band-Maid)")
+        print("4. [Fase 2] Auditar y clasificar los 5 sitios web (Básico, Intermedio, Avanzado)")
+        print("5. [Fase 3] Extraer datos de Portal Oficial (Búsqueda + Filtros + SQLite + CSV)")
+        print("6. [Fase 3] Consultar base de datos SQLite de datos oficiales")
         print("0. Salir")
         try:
             choice = input("Seleccione una opción: ").strip()
@@ -239,7 +371,7 @@ def _show_menu():
             logger.warning("Interactive input ended while waiting for a menu choice")
             print("\nNo se recibió una opción; saliendo.")
             return "0"
-        if choice in {"0", "1", "2", "3"}:
+        if choice in {"0", "1", "2", "3", "4", "5", "6"}:
             return choice
         logger.warning("Invalid menu option rejected")
         print("Opción no válida. Intente de nuevo.")
@@ -251,20 +383,24 @@ def main(argv=None):
     _validate_args(parser, args)
     configure_logging()
     logger.info(
-        "Application started: browser=%s offset=%d limit=%s screenshot=%s",
+        "Application started: browser=%s offset=%d limit=%s screenshot=%s portal=%s",
         args.browser,
         args.offset,
         args.limit,
         args.screenshot,
+        args.portal,
     )
 
     while True:
         choice = _show_menu()
         menu_actions = {
             "0": "exit",
-            "1": "scraping",
+            "1": "scraping_bandmaid",
             "2": "registration_without_captcha",
             "3": "rate_limit_check",
+            "4": "audit_5_sites",
+            "5": "official_scraping",
+            "6": "sqlite_database_view",
         }
         logger.info(
             "Menu option selected: option=%s action=%s",
@@ -281,8 +417,14 @@ def main(argv=None):
             result = _run_scraping(args)
         elif choice == "2":
             result = _run_security_test(args, "register")
-        else:
+        elif choice == "3":
             result = _run_security_test(args, "rate-limit")
+        elif choice == "4":
+            result = _run_audit(args)
+        elif choice == "5":
+            result = _run_official_scraping(args)
+        else:
+            result = _run_db_view()
 
         if result == 0:
             logger.info("Menu operation completed successfully: action=%s", operation_name)

@@ -13,17 +13,27 @@ python main.py
 
 El menú de la terminal ofrece estas opciones:
 
-1. **Extraer información de la web (scraping):** abre la página pública, extrae las fichas de `#miembros` y guarda el CSV. Los parámetros de scraping siguen disponibles, por ejemplo:
-
-   ```powershell
-   python main.py --browser edge --query "Miku" --limit 1 --screenshot
-   ```
-
+1. **Extraer información de la web propia (scraping Band-Maid):** abre la página pública, extrae las fichas de `#miembros` y guarda el CSV.
 2. **Probar el registro sin CAPTCHA:** hace primero un GET de CSRF y después un único POST de registro omitiendo los datos del CAPTCHA; se espera que el servidor rechace el intento.
 3. **Probar el límite de solicitudes (rate limit):** envía como máximo seis POST secuenciales de inicio de sesión y se detiene en la primera respuesta HTTP 429.
+4. **[Fase 2] Auditar y clasificar los 5 sitios web (Básico, Intermedio, Avanzado):** inspecciona `robots.txt`, cabeceras HTTP de seguridad (Cloudflare, WAF, CSP, HSTS), frameworks JS en el DOM y barreras antibot de los 5 sitios objetivo. Genera `salida/auditoria_5_sitios.json`, `salida/auditoria_5_sitios.csv` y guarda en SQLite.
+5. **[Fase 3] Extraer datos de Portal Oficial (Búsqueda + Filtros + SQLite + CSV):** navega interactivamente con Selenium en el portal de datos públicos oficial seleccionado (`datos_cdmx` o `data_gov`), realiza búsquedas, gestiona filtros y paginación dinámica, limpia los datos con Pandas y persiste los resultados en SQLite (`salida/datos_oficiales.db`) y archivos CSV/Excel.
+6. **[Fase 3] Consultar base de datos SQLite:** muestra en consola los registros almacenados en la tabla `datasets_oficiales` de la base de datos persistente.
 0. **Salir** sin iniciar una operación.
 
 Al terminar cada operación, el programa vuelve al menú, también si ocurre un error o el servidor rechaza la solicitud de prueba.
+
+### Ejemplos de uso por línea de comandos
+
+```powershell
+# Iniciar el menú interactivo con Edge (por omisión) o Chrome
+python main.py
+python main.py --browser chrome
+
+# Extracción de portal oficial con parámetros específicos:
+python main.py --portal datos_cdmx --query "movilidad" --pages 2 --screenshot
+python main.py --portal data_gov --query "education" --pages 2
+```
 
 ## Registro de actividad
 

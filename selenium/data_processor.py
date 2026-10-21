@@ -156,3 +156,138 @@ def guardar_captura(driver):
         output_path.relative_to(Path(__file__).resolve().parent),
     )
     return output_path
+
+
+# --- FASE 3: Limpieza y persistencia para datos de portales oficiales ---
+OFFICIAL_COLUMNS = [
+    "portal",
+    "title",
+    "organization",
+    "category",
+    "description",
+    "last_updated",
+    "resource_url",
+    "page",
+    "extracted_at",
+]
+
+_MESES_ES = {
+    "enero": "01", "febrero": "02", "marzo": "03", "abril": "04",
+    "mayo": "05", "junio": "06", "julio": "07", "agosto": "08",
+    "septiembre": "09", "setiembre": "09", "octubre": "10",
+    "noviembre": "11", "diciembre": "12"
+}
+
+
+def _normalizar_fecha(fecha_str: str) -> str:
+    """Transforma fechas con texto informal o en español a formato ISO YYYY-MM-DD."""
+    if not fecha_str or pd.isna(fecha_str):
+        return datetime.now().astimezone().strftime("%Y-%m-%d")
+    s = str(fecha_str).strip().lower()
+
+    # Patrón: "28 de agosto 2026" o "28 de agosto de 2026"
+    m = re.search(r"(\d{1,2})\s+de\s+([a-záéíóú]+)(?:\s+de)?\s+(\d{4})", s)
+    if m:
+        dia, mes_nombre, anio = m.groups()
+        mes_num = _MESES_ES.get(mes_nombre, "01")
+        return f"{anio}-{mes_num}-{int(dia):02d}"
+
+    # Patrón YYYY-MM-DD estándar
+    m2 = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", s)
+    if m2:
+        anio, mes, dia = m2.groups()
+        return f"{anio}-{int(mes):02d}-{int(dia):02d}"
+
+    # Solo año
+    m3 = re.search(r"\b(20\d{2})\b", s)
+    if m3:
+        return f"{m3.group(1)}-01-01"
+
+    return datetime.now().astimezone().strftime("%Y-%m-%d")
+
+
+def procesar_datos_oficiales(records, query=None, offset=0, limit=None) -> pd.DataFrame:
+    """Limpia, normaliza con Pandas y valida registros de portales oficiales."""
+    if not records:
+        logger.warning("Empty records received in procesar_datos_oficiales")
+        return pd.DataFrame(columns=OFFICIAL_COLUMNS)
+
+    logger.info("Processing official portal records: total_received=%d query='%s'", len(records), query)
+    df = pd.DataFrame(records)
+
+    # 1. Asegurar todas las columnas necesarias
+    for col in OFFICIAL_COLUMNS:
+        if col not in df.columns:
+            df[col] = pd.NA
+
+    # 2. Limpieza de texto (eliminación de caracteres no imprimibles y normalización de espacios)
+    for col in ("title", "organization", "category", "description", "resource_url"):
+        df[col] = df[col].astype(str).map(
+            lambda v: re.sub(r"[\r\n\t]+", " ", v).strip() if v and v != "<NA>" else ""
+        )
+
+    # 3. Normalización de fechas a ISO
+    df["last_updated"] = df["last_updated"].map(_normalizar_fecha)
+
+    # 4. Descartar filas sin título o URL válida
+    df = df[df["title"].str.len() > 2]
+    df = df[df["resource_url"].str.startswith("http")]
+
+    # 5. Filtrado local por query si fue suministrado
+    if query:
+        needle = str(query).strip().casefold()
+        coincide = (
+            df["title"].str.casefold().str.contains(needle, na=False)
+            | df["description"].str.casefold().str.contains(needle, na=False)
+            | df["category"].str.casefold().str.contains(needle, na=False)
+            | df["organization"].str.casefold().str.contains(needle, na=False)
+        )
+        df = df[coincide]
+
+    # 6. Timestamp de extracción y paginación
+    extracted_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    df["extracted_at"] = extracted_at
+    df["page"] = pd.to_numeric(df["page"], errors="coerce").fillna(1).astype(int)
+
+    # Paginación
+    if offset > 0:
+        df = df.iloc[offset:]
+    if limit is not None and limit > 0:
+        df = df.iloc[:limit]
+
+    df = df.reindex(columns=OFFICIAL_COLUMNS).reset_index(drop=True)
+    logger.info("Official data processing completed: final_rows=%d", len(df))
+    return df
+
+
+def guardar_resultados_oficiales(df: pd.DataFrame, portal_tag: str = "portal_oficial") -> dict:
+    """Guarda el dataset limpio tanto en SQLite (persistente) como en archivo CSV."""
+    from database import guardar_en_sqlite
+
+    output_dir = Path(__file__).resolve().parent / OUTPUT_DIR_NAME
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+
+    # 1. Guardar en SQLite
+    filas_sqlite = guardar_en_sqlite(df, table_name="datasets_oficiales")
+
+    # 2. Guardar en CSV estructurado
+    csv_filename = f"{portal_tag}_{timestamp}.csv"
+    csv_path = output_dir / csv_filename
+    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+
+    # 3. Guardar en Excel si openpyxl está disponible
+    excel_path = None
+    try:
+        excel_filename = f"{portal_tag}_{timestamp}.xlsx"
+        excel_path = output_dir / excel_filename
+        df.to_excel(excel_path, index=False, engine="openpyxl")
+    except Exception as exc:
+        logger.debug("Excel export skipped: %s", exc)
+
+    logger.info("Official data stored: sqlite_rows=%d csv=%s", filas_sqlite, csv_path.name)
+    return {
+        "sqlite_rows": filas_sqlite,
+        "csv_path": csv_path,
+        "excel_path": excel_path,
+    }
