@@ -69,19 +69,60 @@ def detectar_desafio(driver):
     return any(driver.find_elements(By.CSS_SELECTOR, selector) for selector in challenge_selectors)
 
 
-def _ensure_no_challenge(driver, records=None, pages_processed=0):
-    if detectar_desafio(driver):
-        logger.warning(
-            "Access challenge detected; extraction will stop "
-            "(pages_processed=%d records_collected=%d)",
-            pages_processed,
-            len(records) if records is not None else 0,
-        )
+def manejar_barrera_etica(driver, records=None, pages_processed=0, permitir_continuar=True):
+    """Manejo Ético de Barreras: Si se detecta un CAPTCHA o desafío de acceso,
+    se pausa respetuosamente solicitando la intervención del operador humano
+    para continuar con la extracción."""
+    if not detectar_desafio(driver):
+        return True
+
+    logger.warning(
+        "Manejo Ético: Desafío de verificación humana detectado. Pausando script para intervención manual (pages=%d, records=%d)",
+        pages_processed,
+        len(records) if records else 0,
+    )
+    print("\n" + "=" * 75)
+    print(" [MANEJO ÉTICO DE BARRERAS - INTERVENCIÓN MANUAL REQUERIDA]")
+    print(" Se ha identificado un límite de acceso en el sitio (CAPTCHA / Verificación).")
+    print(" Por respeto a las políticas del sitio y límites éticos, el script se")
+    print(" pausa respetuosamente para que el operador humano intervenga en el navegador.")
+    print("=" * 75)
+
+    if not permitir_continuar:
         raise HumanVerificationDetected(
-            "Se detectó una posible verificación humana o bloqueo de acceso.",
+            "Desafío de acceso detectado; extracción detenida conforme a política ética.",
             records=records,
             pages_processed=pages_processed,
         )
+
+    while True:
+        try:
+            resp = input(
+                "\nPor favor complete el CAPTCHA en la ventana de Selenium y presione ENTER para continuar (o 'q' para cancelar): "
+            ).strip().lower()
+        except EOFError:
+            resp = "q"
+
+        if resp in {"q", "cancelar", "salir"}:
+            logger.info("Human operator cancelled challenge resolution; stopping extraction")
+            raise HumanVerificationDetected(
+                "Extracción cancelada por el operador durante el desafío de verificación.",
+                records=records,
+                pages_processed=pages_processed,
+            )
+
+        # Verificar si el desafío ya fue resuelto
+        if not detectar_desafio(driver):
+            logger.info("Human operator successfully cleared challenge. Resuming dynamic navigation.")
+            print(">> Verificación humana superada exitosamente. Continuando extracción dinámicamente...")
+            return True
+        else:
+            print(">> El desafío aún se detecta activo en el navegador. Por favor resuélvalo antes de continuar.")
+
+
+def _ensure_no_challenge(driver, records=None, pages_processed=0):
+    manejar_barrera_etica(driver, records=records, pages_processed=pages_processed, permitir_continuar=True)
+
 
 
 def extraer_miembros(driver, wait):

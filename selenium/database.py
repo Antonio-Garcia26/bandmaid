@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Optional
 import pandas as pd
+
 
 from config import OUTPUT_DIR_NAME
 from logging_config import get_logger
@@ -37,6 +38,7 @@ def init_db() -> Path:
                     title TEXT NOT NULL,
                     organization TEXT,
                     category TEXT,
+                    num_resources INTEGER DEFAULT 1,
                     description TEXT,
                     last_updated TEXT,
                     resource_url TEXT,
@@ -45,6 +47,12 @@ def init_db() -> Path:
                 )
                 """
             )
+            # Asegurar migración de num_resources si la tabla ya existía
+            cursor.execute("PRAGMA table_info(datasets_oficiales)")
+            columnas = [info[1] for info in cursor.fetchall()]
+            if "num_resources" not in columnas:
+                cursor.execute("ALTER TABLE datasets_oficiales ADD COLUMN num_resources INTEGER DEFAULT 1")
+
             # Índices para búsquedas rápidas
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_portal ON datasets_oficiales(portal)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_category ON datasets_oficiales(category)")
@@ -73,6 +81,7 @@ def init_db() -> Path:
         logger.exception("Failed to initialize SQLite database at %s", db_path)
         raise
     return db_path
+
 
 
 def guardar_en_sqlite(df: pd.DataFrame, table_name: str = "datasets_oficiales") -> int:
@@ -128,3 +137,30 @@ def contar_registros_sqlite(table_name: str = "datasets_oficiales") -> int:
             return row[0] if row else 0
     except Exception:
         return 0
+
+
+def guardar_en_postgres_opcional(df: pd.DataFrame, table_name: str = "datasets_oficiales", postgres_url: Optional[str] = None) -> Optional[int]:
+    """Guarda el DataFrame en PostgreSQL si se suministra una cadena de conexión o variable POSTGRES_URL.
+    
+    Permite alternar de SQLite a PostgreSQL según los requerimientos de persistencia.
+    """
+    import os
+    url = postgres_url or os.getenv("POSTGRES_URL") or os.getenv("DATABASE_URL")
+    if not url:
+        logger.debug("PostgreSQL URL not configured; using local SQLite storage as primary database.")
+        return None
+
+    try:
+        from sqlalchemy import create_engine  # type: ignore
+        engine = create_engine(url)
+
+        df_to_save = df.copy()
+        if "id" in df_to_save.columns:
+            df_to_save = df_to_save.drop(columns=["id"])
+        df_to_save.to_sql(table_name, engine, if_exists="append", index=False)
+        logger.info("Successfully persisted %d rows into PostgreSQL table '%s'", len(df_to_save), table_name)
+        return len(df_to_save)
+    except Exception as err:
+        logger.warning("PostgreSQL sync could not be completed (%s); SQLite remains unaffected.", err)
+        return None
+

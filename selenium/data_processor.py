@@ -3,8 +3,10 @@
 from datetime import datetime
 from pathlib import Path
 import re
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
+
 
 from config import OUTPUT_DIR_NAME
 from logging_config import get_logger
@@ -164,6 +166,7 @@ OFFICIAL_COLUMNS = [
     "title",
     "organization",
     "category",
+    "num_resources",
     "description",
     "last_updated",
     "resource_url",
@@ -177,6 +180,38 @@ _MESES_ES = {
     "septiembre": "09", "setiembre": "09", "octubre": "10",
     "noviembre": "11", "diciembre": "12"
 }
+
+
+def _limpiar_caracteres_especiales(texto: Any) -> str:
+    """Elimina caracteres no imprimibles, de control y normaliza espacios en blanco."""
+    if texto is None or pd.isna(texto):
+        return ""
+    s = str(texto)
+    # Eliminar caracteres de control ASCII (excepto espacios normales)
+    s = re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", s)
+    # Reemplazar múltiples espacios, tabs y saltos de línea por un único espacio
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _normalizar_numero(valor: Any, default: int = 1) -> int:
+    """Transformación y normalización de valores numéricos crudos.
+    
+    Elimina caracteres especiales, separadores de miles y extrae el valor numérico.
+    Ejemplos: '1,250 descargas' -> 1250, '3 recursos' -> 3, '5' -> 5, None -> default.
+    """
+    if valor is None or pd.isna(valor):
+        return default
+    if isinstance(valor, (int, float)) and not isinstance(valor, bool):
+        return int(valor)
+    s = str(valor).replace(",", "").strip()
+    m = re.search(r"(\d+)", s)
+    if m:
+        try:
+            return int(m.group(1))
+        except (ValueError, OverflowError):
+            return default
+    return default
 
 
 def _normalizar_fecha(fecha_str: str) -> str:
@@ -207,7 +242,14 @@ def _normalizar_fecha(fecha_str: str) -> str:
 
 
 def procesar_datos_oficiales(records, query=None, offset=0, limit=None) -> pd.DataFrame:
-    """Limpia, normaliza con Pandas y valida registros de portales oficiales."""
+    """Limpia, normaliza con Pandas y valida registros de portales oficiales.
+    
+    Aplica:
+    1. Eliminación de caracteres especiales y no imprimibles.
+    2. Normalización de fechas a formato ISO (YYYY-MM-DD).
+    3. Normalización y tipado de valores numéricos (num_resources, page).
+    4. Filtrado y paginación estructurada.
+    """
     if not records:
         logger.warning("Empty records received in procesar_datos_oficiales")
         return pd.DataFrame(columns=OFFICIAL_COLUMNS)
@@ -222,18 +264,20 @@ def procesar_datos_oficiales(records, query=None, offset=0, limit=None) -> pd.Da
 
     # 2. Limpieza de texto (eliminación de caracteres no imprimibles y normalización de espacios)
     for col in ("title", "organization", "category", "description", "resource_url"):
-        df[col] = df[col].astype(str).map(
-            lambda v: re.sub(r"[\r\n\t]+", " ", v).strip() if v and v != "<NA>" else ""
-        )
+        df[col] = df[col].map(_limpiar_caracteres_especiales)
 
-    # 3. Normalización de fechas a ISO
+    # 3. Normalización de fechas a ISO YYYY-MM-DD
     df["last_updated"] = df["last_updated"].map(_normalizar_fecha)
 
-    # 4. Descartar filas sin título o URL válida
+    # 4. Normalización y transformación de valores numéricos con Pandas
+    df["num_resources"] = df["num_resources"].map(lambda v: _normalizar_numero(v, default=1)).astype(int)
+    df["page"] = pd.to_numeric(df["page"], errors="coerce").fillna(1).astype(int)
+
+    # 5. Descartar filas sin título o URL válida
     df = df[df["title"].str.len() > 2]
     df = df[df["resource_url"].str.startswith("http")]
 
-    # 5. Filtrado local por query si fue suministrado
+    # 6. Filtrado local por query si fue suministrado
     if query:
         needle = str(query).strip().casefold()
         coincide = (
@@ -244,10 +288,9 @@ def procesar_datos_oficiales(records, query=None, offset=0, limit=None) -> pd.Da
         )
         df = df[coincide]
 
-    # 6. Timestamp de extracción y paginación
+    # 7. Timestamp de extracción y paginación
     extracted_at = datetime.now().astimezone().isoformat(timespec="seconds")
     df["extracted_at"] = extracted_at
-    df["page"] = pd.to_numeric(df["page"], errors="coerce").fillna(1).astype(int)
 
     # Paginación
     if offset > 0:
@@ -261,33 +304,44 @@ def procesar_datos_oficiales(records, query=None, offset=0, limit=None) -> pd.Da
 
 
 def guardar_resultados_oficiales(df: pd.DataFrame, portal_tag: str = "portal_oficial") -> dict:
-    """Guarda el dataset limpio tanto en SQLite (persistente) como en archivo CSV."""
-    from database import guardar_en_sqlite
+    """Guarda el dataset estructurado en SQLite (persistente) y en archivos CSV, JSON y Excel."""
+    from database import guardar_en_sqlite, guardar_en_postgres_opcional
 
     output_dir = Path(__file__).resolve().parent / OUTPUT_DIR_NAME
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
 
-    # 1. Guardar en SQLite
+    # 1. Base de datos relacional SQLite
     filas_sqlite = guardar_en_sqlite(df, table_name="datasets_oficiales")
 
-    # 2. Guardar en CSV estructurado
+    # Opcional: Sincronizar con PostgreSQL si existe configuración
+    guardar_en_postgres_opcional(df, table_name="datasets_oficiales")
+
+    # 2. Archivo estructurado CSV
     csv_filename = f"{portal_tag}_{timestamp}.csv"
     csv_path = output_dir / csv_filename
     df.to_csv(csv_path, index=False, encoding="utf-8-sig")
 
-    # 3. Guardar en Excel si openpyxl está disponible
+    # 3. Archivo estructurado JSON
+    json_filename = f"{portal_tag}_{timestamp}.json"
+    json_path = output_dir / json_filename
+    df.to_json(json_path, orient="records", indent=2, force_ascii=False)
+
+    # 4. Archivo estructurado Excel (.xlsx)
     excel_path = None
     try:
         excel_filename = f"{portal_tag}_{timestamp}.xlsx"
         excel_path = output_dir / excel_filename
         df.to_excel(excel_path, index=False, engine="openpyxl")
     except Exception as exc:
-        logger.debug("Excel export skipped: %s", exc)
+        logger.warning("Excel export skipped: %s", exc)
 
-    logger.info("Official data stored: sqlite_rows=%d csv=%s", filas_sqlite, csv_path.name)
+    logger.info("Official data stored: sqlite_rows=%d csv=%s json=%s excel=%s",
+                filas_sqlite, csv_path.name, json_path.name, excel_path.name if excel_path else "none")
     return {
         "sqlite_rows": filas_sqlite,
         "csv_path": csv_path,
+        "json_path": json_path,
         "excel_path": excel_path,
     }
+

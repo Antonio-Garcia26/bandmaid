@@ -1,54 +1,102 @@
-# Extracción pública de Band-Maid con Selenium y Pandas
+# Automatización, Auditoría y Extracción con Selenium y Pandas
 
-Programa modular para navegar la página pública de Band-Maid, extraer sus fichas de `#miembros` y procesarlas con Pandas. Selenium abre Edge de forma visible por defecto (o Chrome con `--browser chrome`) y usa esperas explícitas. El sitio no ofrece controles propios de búsqueda ni paginación, así que `--query`, `--offset` y `--limit` se aplican localmente al DataFrame.
+Programa modular para automatización web, análisis de seguridad perimetral y extracción estructurada de datos públicos mediante Selenium WebDriver y Pandas.
 
-## Instalación y uso
+---
 
-Desde esta carpeta:
+## Cumplimiento de los 5 Requerimientos Técnicos
+
+| # | Requerimiento | Implementación en el Código |
+|---|---|---|
+| **1** | **Navegación y Localización** | Búsqueda dinámica con Selenium WebDriver (`send_keys` + `Keys.ENTER`), selección interactiva de filtros de formato/categoría (clic en facetas del DOM y fallback inteligente), y navegación paginada dinámica con `WebDriverWait`. |
+| **2** | **Manejo Ético de Barreras** | Identificación de límites y retos antibot (Cloudflare Turnstile, reCAPTCHA, hCaptcha, Rate Limiting 429). Si se detecta un desafío, el script se pausa respetuosamente solicitando la intervención del operador humano para resolverlo en la ventana del navegador y **continuar** la extracción dinámicamente. |
+| **3** | **Extracción Estructurada** | Localizadores robustos híbridos (`By.CSS_SELECTOR` y `By.XPATH`), selectores de respaldo para elementos dinámicos, extracción limpia de metadatos (título, organización, categoría, cantidad de recursos, descripción, fecha y URL). |
+| **4** | **Procesamiento y Limpieza (Pandas)** | Transformación con Pandas: eliminación de caracteres no imprimibles y espacios redundantes (`_limpiar_caracteres_especiales`), normalización de fechas a ISO `YYYY-MM-DD` (`_normalizar_fecha`), y normalización de valores numéricos (`_normalizar_numero` para métricas como `num_resources` y `page`). |
+| **5** | **Almacenamiento Persistente** | Persistencia multicanal: Base de datos relacional **SQLite** (`salida/datos_oficiales.db`), archivos estructurados **CSV** (con BOM UTF-8), archivos estructurados **JSON**, archivos **Excel** (`.xlsx` vía `openpyxl`), y adaptador opcional para **PostgreSQL**. |
+
+---
+
+## Instalación y Configuración
+
+Desde el directorio `selenium/`:
 
 ```powershell
 python -m pip install -r requirements.txt
 python main.py
 ```
 
-El menú de la terminal ofrece estas opciones:
+### Dependencias Principales (`requirements.txt`)
+- `selenium>=4.20,<5`: Automatización del navegador visible con Selenium Manager.
+- `pandas>=2.0,<4`: Procesamiento, limpieza y estructuración de datos.
+- `openpyxl>=3.1.0`: Generación de hojas de cálculo Excel (`.xlsx`).
+- `requests>=2.31.0`: Auditoría HTTP de cabeceras, WAF y directivas `robots.txt`.
 
-1. **Extraer información de la web propia (scraping Band-Maid):** abre la página pública, extrae las fichas de `#miembros` y guarda el CSV.
-2. **Probar el registro sin CAPTCHA:** hace primero un GET de CSRF y después un único POST de registro omitiendo los datos del CAPTCHA; se espera que el servidor rechace el intento.
-3. **Probar el límite de solicitudes (rate limit):** envía como máximo seis POST secuenciales de inicio de sesión y se detiene en la primera respuesta HTTP 429.
-4. **[Fase 2] Auditar y clasificar los 5 sitios web (Básico, Intermedio, Avanzado):** inspecciona `robots.txt`, cabeceras HTTP de seguridad (Cloudflare, WAF, CSP, HSTS), frameworks JS en el DOM y barreras antibot de los 5 sitios objetivo. Genera `salida/auditoria_5_sitios.json`, `salida/auditoria_5_sitios.csv` y guarda en SQLite.
-5. **[Fase 3] Extraer datos de Portal Oficial (Búsqueda + Filtros + SQLite + CSV):** navega interactivamente con Selenium en el portal de datos públicos oficial seleccionado (`datos_cdmx` o `data_gov`), realiza búsquedas, gestiona filtros y paginación dinámica, limpia los datos con Pandas y persiste los resultados en SQLite (`salida/datos_oficiales.db`) y archivos CSV/Excel.
-6. **[Fase 3] Consultar base de datos SQLite:** muestra en consola los registros almacenados en la tabla `datasets_oficiales` de la base de datos persistente.
-0. **Salir** sin iniciar una operación.
+---
 
-Al terminar cada operación, el programa vuelve al menú, también si ocurre un error o el servidor rechaza la solicitud de prueba.
+## Menú Interactivo de la Aplicación
 
-### Ejemplos de uso por línea de comandos
+Al ejecutar `python main.py`, se despliega el menú en consola con las pruebas individuales y módulos:
+
+```text
+=== Menú de Automatización, Seguridad y Extracción ===
+1. Extraer fichas de Band-Maid (Scraping local/propio)
+2. [Seguridad 1/5] Probar CAPTCHA (Omisión de código de verificación HTTP 400)
+3. [Seguridad 2/5] Probar Rate Limit (Ráfaga de solicitudes concurrentes HTTP 429)
+4. [Seguridad 3/5] Probar Protección Anti-CSRF (Token manipulado HTTP 403)
+5. [Seguridad 4/5] Probar Trampa Honeypot (Campo oculto bot HTTP 400)
+6. [Seguridad 5/5] Probar Telemetría y Automatización (Webdriver/Bot HTTP 400)
+7. [Seguridad Batería] Ejecutar los 5 métodos de seguridad en secuencia
+8. [Fase 2] Auditar y clasificar los 5 sitios web (Básico, Intermedio, Avanzado)
+9. [Fase 3] Extraer datos de Portal Oficial (Búsqueda + Filtros + SQLite + CSV)
+10. [Fase 3] Consultar base de datos SQLite de datos oficiales
+0. Salir
+```
+
+---
+
+## Las 5 Pruebas Individuales de Seguridad
+
+| # | Método de Seguridad | Escenario de Ataque Evaluado | Respuesta Esperada del Servidor |
+|---|---|---|---|
+| **1** | **CAPTCHA** | Envía formulario de registro omitiendo token y respuesta de CAPTCHA. | `HTTP 400 · CAPTCHA_INVALID` |
+| **2** | **Rate Limiting** | Ráfaga de solicitudes POST secuenciales de inicio de sesión. | `HTTP 429 · RATE_LIMITED` |
+| **3** | **Protección Anti-CSRF** | Envía mutación POST con encabezado `X-CSRF-Token` manipulado o ausente. | `HTTP 403 · CSRF_REJECTED` |
+| **4** | **Trampa Honeypot** | Envía formulario con el campo oculto `website` completado por un bot. | `HTTP 400 · BOT_REJECTED` |
+| **5** | **Telemetría y Webdriver** | Envía telemetría con `isWebdriver: true` y velocidad inhumana (<1.2s). | `HTTP 400 · BOT_BEHAVIOR_DETECTED` |
+
+---
+
+## Ejemplos de Uso por Línea de Comandos
 
 ```powershell
-# Iniciar el menú interactivo con Edge (por omisión) o Chrome
+# Iniciar con Edge (predeterminado) o Chrome
 python main.py
 python main.py --browser chrome
 
-# Extracción de portal oficial con parámetros específicos:
-python main.py --portal datos_cdmx --query "movilidad" --pages 2 --screenshot
-python main.py --portal data_gov --query "education" --pages 2
+# Ejecución individual de cada prueba de seguridad por CLI:
+python main.py --security-test captcha
+python main.py --security-test rate-limit
+python main.py --security-test csrf
+python main.py --security-test honeypot
+python main.py --security-test telemetry
+python main.py --security-test all
+
+# Extracción en portal oficial con búsqueda, filtro y paginación
+python main.py --portal datos_cdmx --query "movilidad" --filter "csv" --pages 2 --screenshot
+python main.py --portal data_gov --query "education" --filter "csv" --pages 2
+
+
+# Paginación y límite sobre el DataFrame resultante
+python main.py --portal datos_cdmx --query "salud" --offset 2 --limit 5
 ```
 
-## Registro de actividad
+---
 
-Los eventos se guardan en `salida/selenium.log` en UTF-8. Cada línea usa el formato `[PID] [fecha,milisegundos] NIVEL [archivo.py:línea] ==> mensaje`. El archivo se escribe en modo append y rota al alcanzar 5 MB, conservando tres respaldos (`selenium.log.1` a `selenium.log.3`).
+## Estructura de Salidas (`salida/`)
 
-El navegador correspondiente debe estar instalado. Selenium Manager gestiona el controlador cuando sea necesario. `python main.py --help` muestra las opciones de línea de comandos, incluido `--browser` (`edge` por omisión o `chrome`).
-
-## Flujo de trabajo
-
-- Abre la página pública y pulsa el enlace visible a `#miembros`.
-- Extrae nombre, función, texto alternativo de imagen y URL de cada ficha.
-- Normaliza el texto, descarta registros sin los campos requeridos, agrega la fecha de extracción y muestra el DataFrame procesado.
-- `--query` busca texto localmente, sin distinguir mayúsculas; `--offset` y `--limit` permiten recorrer una porción de la tabla.
-- Guarda cada resultado en un CSV con nombre único dentro de `salida/`; `--screenshot` guarda una captura PNG de la página visible en la misma carpeta.
-
-El scraping de la opción 1 no inicia sesión ni envía formularios. Si detecta CAPTCHA, acceso denegado o una verificación humana, pausa para revisión manual y detiene la extracción; no intenta resolver ni sortear el desafío.
-
-Las pruebas de seguridad de las opciones 2 y 3 solo se ejecutan contra `https://bandmaid-abcd123.vercel.app/`. El destino está fijado en el programa: no se puede cambiar a localhost ni configurar otra URL.
+Todos los artefactos generados se guardan de forma persistente en la carpeta `salida/`:
+- `datos_oficiales.db`: Base de datos SQLite persistente con tablas `datasets_oficiales` y `auditoria_sitios`.
+- `*.csv`: Datasets tabulares limpios y listos para análisis.
+- `*.json`: Datasets estructurados en formato JSON.
+- `*.xlsx`: Hojas de cálculo Excel nativas.
+- `selenium.log`: Registro de eventos rotativo con timestamp, nivel de severidad y PID.
