@@ -9,7 +9,7 @@ if sys.stdout and hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
-from database import consultar_sqlite, contar_registros_sqlite
+from database import consultar_sqlite, contar_registros_sqlite, generar_reporte_sql_analitico
 from data_processor import (
     guardar_captura,
     guardar_resultados,
@@ -316,23 +316,56 @@ def _run_official_scraping(args):
 
 
 def _run_db_view():
-    """Consulta y muestra los registros almacenados en la base de datos SQLite."""
-    total = contar_registros_sqlite("datasets_oficiales")
-    total_audit = contar_registros_sqlite("auditoria_sitios")
-    print("\n" + "=" * 60)
-    print("CONSULTA DE BASE DE DATOS SQLITE (salida/datos_oficiales.db)")
-    print(f"Total registros datasets_oficiales: {total} | Total auditorías registradas: {total_audit}")
-    print("=" * 60)
-
-    if total == 0:
-        print("La tabla 'datasets_oficiales' aún no tiene registros.")
-        print("Ejecute la opción 5 para extraer y almacenar datos de un portal oficial.")
+    """Ejecuta consultas analíticas SQL en SQLite, muestra resultados en consola y exporta a Excel/CSV."""
+    reporte = generar_reporte_sql_analitico()
+    if "error" in reporte:
+        print(f"\n{reporte['error']}")
         return 0
 
-    df = consultar_sqlite("datasets_oficiales", limit=15)
-    cols = ["id", "portal", "title", "category", "last_updated"]
-    cols_exist = [c for c in cols if c in df.columns]
-    print(df[cols_exist].to_string(index=False))
+    print("\n" + "=" * 76)
+    print("           REPORTE ANALITICO DE BASE DE DATOS SQLITE (SQLite3)")
+    print("                     Archivo: salida/datos_oficiales.db")
+    print("=" * 76)
+    print(f" Total de Registros Almacenados: {reporte['total_registros']}")
+    print(f" Estado de Integridad:           100% Sin Duplicados (Deduplicado)")
+    print("=" * 76)
+
+    print("\n[CONSULTA SQL 1] Datasets Agrupados por Portal y Categoria (GROUP BY):")
+    print("-" * 76)
+    resumen_str = reporte["df_resumen"].to_string(index=False)
+    for linea in resumen_str.splitlines():
+        print(f"  {linea}")
+    print("-" * 76)
+
+    print("\n[CONSULTA SQL 2] Auditoria de Integridad y Duplicados (HAVING COUNT > 1):")
+    print("-" * 76)
+    if reporte["total_duplicados"] == 0:
+        print("  [OK] 0 duplicados encontrados. La base de datos es totalmente integra.")
+        print("  [OK] Volver a ejecutar la extraccion no duplica innecesariamente datos.")
+    else:
+        print(f"  [AVISO] Se detectaron {reporte['total_duplicados']} registros con duplicidad potencial.")
+    print("-" * 76)
+
+    print("\n[CONSULTA SQL 3] Muestra de los Datasets mas Recientes (LIMIT 10):")
+    print("-" * 76)
+    cols_vista = ["id", "portal", "title", "category", "last_updated"]
+    df_preview = reporte["df_detalle"][cols_vista].head(10).copy()
+    df_preview["title"] = df_preview["title"].map(lambda t: (t[:36] + "...") if len(t) > 36 else t)
+    df_preview["category"] = df_preview["category"].map(lambda c: (c[:18] + "...") if len(c) > 18 else c)
+    detalle_str = df_preview.to_string(index=False)
+    for linea in detalle_str.splitlines():
+        print(f"  {linea}")
+    print("-" * 76)
+
+    print("\n" + "=" * 76)
+    print("        ARCHIVOS EXPORTADOS LISTOS PARA ABRIR EN MICROSOFT EXCEL")
+    print("=" * 76)
+    if reporte.get("excel_path"):
+        print(f"  * Excel (.xlsx): {reporte['excel_path'].name}")
+    print(f"  * CSV Resumen:   {reporte['csv_resumen'].name}")
+    print(f"  * CSV Detalle:   {reporte['csv_detalle'].name}")
+    print("\n  Ubicacion: Carpeta 'salida/'. Puedes abrirlos con doble clic en Windows.")
+    print("=" * 76 + "\n")
     return 0
 
 

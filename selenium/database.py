@@ -85,9 +85,9 @@ def init_db() -> Path:
 
 
 def guardar_en_sqlite(df: pd.DataFrame, table_name: str = "datasets_oficiales") -> int:
-    """Guarda un DataFrame de Pandas en la base de datos SQLite.
+    """Guarda un DataFrame de Pandas en SQLite evitando duplicados existentes en la base de datos.
     
-    Devuelve la cantidad de registros insertados.
+    Devuelve la cantidad de registros nuevos insertados.
     """
     if df is None or df.empty:
         logger.info("No rows to save in SQLite table '%s'", table_name)
@@ -96,13 +96,29 @@ def guardar_en_sqlite(df: pd.DataFrame, table_name: str = "datasets_oficiales") 
     db_path = init_db()
     try:
         with sqlite3.connect(db_path) as conn:
-            # Excluir columna 'id' si ya viene en el DataFrame para dejar que SQLite autoincremente
+            # Consultar registros ya existentes para no reinsertarlos (idempotencia)
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT title, resource_url FROM {table_name}")
+            existentes = {(str(r[0]), str(r[1])) for r in cursor.fetchall()}
+
             df_to_save = df.copy()
             if "id" in df_to_save.columns:
                 df_to_save = df_to_save.drop(columns=["id"])
-            df_to_save.to_sql(table_name, conn, if_exists="append", index=False)
-        inserted_count = len(df)
-        logger.info("Saved %d rows into SQLite table '%s'", inserted_count, table_name)
+
+            # Filtrar filas que ya existen en la base de datos
+            mascara_nuevos = df_to_save.apply(
+                lambda row: (str(row.get("title")), str(row.get("resource_url"))) not in existentes,
+                axis=1
+            )
+            df_nuevos = df_to_save[mascara_nuevos]
+
+            if not df_nuevos.empty:
+                df_nuevos.to_sql(table_name, conn, if_exists="append", index=False)
+                inserted_count = len(df_nuevos)
+            else:
+                inserted_count = 0
+
+        logger.info("Saved %d new unique rows into SQLite table '%s' (skipped %d duplicates)", inserted_count, table_name, len(df_to_save) - inserted_count)
         return inserted_count
     except Exception:
         logger.exception("Error saving DataFrame into SQLite table '%s'", table_name)
@@ -137,6 +153,73 @@ def contar_registros_sqlite(table_name: str = "datasets_oficiales") -> int:
             return row[0] if row else 0
     except Exception:
         return 0
+
+
+def generar_reporte_sql_analitico() -> dict:
+    """Ejecuta consultas analíticas SQL en SQLite y genera archivos CSV y Excel listos para abrir."""
+    from datetime import datetime
+    db_path = get_db_path()
+    output_dir = db_path.parent
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+
+    if not db_path.exists():
+        return {"error": "Base de datos SQLite no encontrada."}
+
+    with sqlite3.connect(db_path) as conn:
+        # Consulta 1: Resumen agrupado por portal y categoría con conteos
+        q_resumen = """
+            SELECT portal, category, COUNT(*) AS total_datasets
+            FROM datasets_oficiales
+            GROUP BY portal, category
+            ORDER BY total_datasets DESC
+        """
+        df_resumen = pd.read_sql_query(q_resumen, conn)
+
+        # Consulta 2: Auditoría estricta de registros duplicados por título y recurso
+        q_duplicados = """
+            SELECT title, resource_url, COUNT(*) AS repeticiones
+            FROM datasets_oficiales
+            GROUP BY title, resource_url
+            HAVING COUNT(*) > 1
+        """
+        df_duplicados = pd.read_sql_query(q_duplicados, conn)
+
+        # Consulta 3: Vista de detalle de los registros más recientes
+        q_detalle = """
+            SELECT id, portal, title, organization, category, last_updated, resource_url, extracted_at
+            FROM datasets_oficiales
+            ORDER BY id DESC
+            LIMIT 50
+        """
+        df_detalle = pd.read_sql_query(q_detalle, conn)
+
+    # Exportar a CSV con UTF-8 BOM para apertura perfecta en Excel en español
+    csv_resumen = output_dir / f"reporte_sql_resumen_{timestamp}.csv"
+    csv_detalle = output_dir / f"reporte_sql_detalle_{timestamp}.csv"
+    df_resumen.to_csv(csv_resumen, index=False, encoding="utf-8-sig")
+    df_detalle.to_csv(csv_detalle, index=False, encoding="utf-8-sig")
+
+    # Exportar a Excel (.xlsx) con hojas múltiples
+    excel_path = output_dir / f"reporte_sql_analitico_{timestamp}.xlsx"
+    try:
+        with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+            df_resumen.to_excel(writer, sheet_name="Resumen por Categoria", index=False)
+            df_detalle.to_excel(writer, sheet_name="Detalle Datasets", index=False)
+            df_duplicados.to_excel(writer, sheet_name="Auditoria Duplicados", index=False)
+    except Exception as exc:
+        logger.debug("Excel export error: %s", exc)
+        excel_path = None
+
+    return {
+        "df_resumen": df_resumen,
+        "df_duplicados": df_duplicados,
+        "df_detalle": df_detalle,
+        "csv_resumen": csv_resumen,
+        "csv_detalle": csv_detalle,
+        "excel_path": excel_path,
+        "total_registros": contar_registros_sqlite("datasets_oficiales"),
+        "total_duplicados": len(df_duplicados),
+    }
 
 
 def guardar_en_postgres_opcional(df: pd.DataFrame, table_name: str = "datasets_oficiales", postgres_url: Optional[str] = None) -> Optional[int]:

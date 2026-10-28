@@ -277,7 +277,20 @@ def procesar_datos_oficiales(records, query=None, offset=0, limit=None) -> pd.Da
     df = df[df["title"].str.len() > 2]
     df = df[df["resource_url"].str.startswith("http")]
 
-    # 6. Filtrado local por query si fue suministrado
+    # 6. Eliminar duplicados y gestionar valores faltantes
+    rows_antes_duplicados = len(df)
+    df = df.drop_duplicates(subset=["title", "resource_url"], keep="first")
+    df = df.fillna({
+        "title": "Sin título",
+        "organization": "Sin organización",
+        "category": "Sin categoría",
+        "description": "Sin descripción",
+        "last_updated": datetime.now().astimezone().strftime("%Y-%m-%d"),
+    })
+    rows_despues_duplicados = len(df)
+    logger.info("Duplicates removed: before=%d after=%d removed=%d", rows_antes_duplicados, rows_despues_duplicados, rows_antes_duplicados - rows_despues_duplicados)
+
+    # 7. Filtrado local por query si fue suministrado
     if query:
         needle = str(query).strip().casefold()
         coincide = (
@@ -288,7 +301,7 @@ def procesar_datos_oficiales(records, query=None, offset=0, limit=None) -> pd.Da
         )
         df = df[coincide]
 
-    # 7. Timestamp de extracción y paginación
+    # 8. Timestamp de extracción y paginación
     extracted_at = datetime.now().astimezone().isoformat(timespec="seconds")
     df["extracted_at"] = extracted_at
 
