@@ -45,6 +45,7 @@ export async function getSessionUser(request: NextRequest): Promise<FanUser | nu
 
   try {
     const decoded = await services.auth.verifySessionCookie(sessionCookie, true);
+    if (decoded.email_verified !== true) return null;
     return toFanUser({ uid: decoded.uid, email: decoded.email, displayName: decoded.name });
   } catch {
     return null;
@@ -69,6 +70,41 @@ export async function signInWithPassword(email: string, password: string): Promi
 
   const result = (await response.json()) as IdentityToolkitResult;
   return typeof result.idToken === "string" && typeof result.localId === "string" ? result : null;
+}
+
+export async function isEmailVerified(idToken: string): Promise<boolean> {
+  const apiKey = configuredValue("NEXT_PUBLIC_FIREBASE_API_KEY");
+  if (!apiKey) throw new Error("Firebase API key unavailable");
+  const response = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(apiKey)}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ idToken }),
+      signal: AbortSignal.timeout(7000),
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) throw new Error("Account lookup failed");
+  const result = (await response.json()) as { users?: { emailVerified?: boolean }[] };
+  if (!result.users?.length) throw new Error("Account lookup returned no user");
+  return result.users[0].emailVerified === true;
+}
+
+export async function sendVerificationEmail(idToken: string): Promise<void> {
+  const apiKey = configuredValue("NEXT_PUBLIC_FIREBASE_API_KEY");
+  if (!apiKey) throw new Error("Firebase API key unavailable");
+  const response = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${encodeURIComponent(apiKey)}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestType: "VERIFY_EMAIL", idToken }),
+      signal: AbortSignal.timeout(7000),
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) throw new Error("Verification email could not be sent");
 }
 
 export async function createSessionCookie(idToken: string): Promise<string | null> {

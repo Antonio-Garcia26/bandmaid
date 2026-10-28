@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getFirebaseAdmin } from "@/lib/firebase-admin";
-import { createSessionCookie, signInWithPassword, toFanUser } from "@/lib/security/auth";
+import { createSessionCookie, isEmailVerified, signInWithPassword, toFanUser } from "@/lib/security/auth";
 import { configuredValue } from "@/lib/security/config";
 import { cookieOptions, SESSION_TTL_MS } from "@/lib/security/mutation";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
@@ -78,6 +78,9 @@ export async function POST(request: NextRequest) {
     const identity = await signInWithPassword(email, password);
     if (!identity?.idToken || !identity.localId) {
       return jsonError("El correo o la contraseña no coinciden.", 401, "INVALID_CREDENTIALS");
+    }
+    if (!(await isEmailVerified(identity.idToken))) {
+      return jsonError("Verifica tu correo electrónico antes de iniciar sesión.", 403, "EMAIL_NOT_VERIFIED");
     }
     const sessionCookie = await createSessionCookie(identity.idToken);
     if (!sessionCookie) return pendingResponse("Firebase Authentication");

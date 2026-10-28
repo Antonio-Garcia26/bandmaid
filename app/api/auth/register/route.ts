@@ -1,7 +1,7 @@
 import { FieldValue } from "firebase-admin/firestore";
 import { NextResponse, type NextRequest } from "next/server";
 import { getFirebaseAdmin } from "@/lib/firebase-admin";
-import { createSessionCookie, signInWithPassword, toFanUser } from "@/lib/security/auth";
+import { sendVerificationEmail, signInWithPassword, toFanUser } from "@/lib/security/auth";
 import { verifyTextCaptcha } from "@/lib/security/captcha";
 import { configuredValue } from "@/lib/security/config";
 import { cookieOptions, SESSION_TTL_MS } from "@/lib/security/mutation";
@@ -89,19 +89,11 @@ export async function POST(request: NextRequest) {
 
     const identity = await signInWithPassword(email, password);
     if (!identity?.idToken) throw new Error("Registration session could not be created");
-    const sessionCookie = await createSessionCookie(identity.idToken);
-    if (!sessionCookie) throw new Error("Registration session could not be created");
-
-    const response = NextResponse.json(
-      { user: toFanUser({ uid: created.uid, displayName, email }) },
+    await sendVerificationEmail(identity.idToken);
+    return NextResponse.json(
+      { verificationRequired: true, email },
       { headers: { "Cache-Control": "no-store" } },
     );
-    response.cookies.set(
-      process.env.NODE_ENV === "production" ? "__Host-bandmaid_session" : "bandmaid_session",
-      sessionCookie,
-      cookieOptions(SESSION_TTL_SECONDS),
-    );
-    return response;
   } catch (error) {
     if (createdUid) {
       await Promise.allSettled([

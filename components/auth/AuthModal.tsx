@@ -13,10 +13,13 @@ import type { FanUser } from "@/lib/types";
 
 type AuthMode = "login" | "register";
 type AuthModalProps = { open: boolean; onClose: () => void; initialMode?: AuthMode };
-type AuthResponse = { user: FanUser };
+type AuthResponse = { user: FanUser } | { verificationRequired: true; email: string };
+type VerificationResponse = { verificationSent?: true; alreadyVerified?: true };
 
 export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalProps) {
   const auth = useAuth();
+  const [verification, setVerification] = useState(false);
+  const [verificationStatus, setVerificationStatus] = useState<"sent" | "verified" | null>(null);
   const [mode, setMode] = useState<AuthMode>(initialMode);
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -36,13 +39,19 @@ export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalPro
 
   const turnstileKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim();
   const infrastructureReady = auth.configured === true && Boolean(turnstileKey && turnstileKey.toUpperCase() !== "PENDIENDTE");
-  const title = mode === "register" ? "Tu lugar empieza aquí." : "Qué bueno verte.";
+  const title = verification ? "Verifica tu correo." : mode === "register" ? "Tu lugar empieza aquí." : "Qué bueno verte.";
 
   function selectMode(nextMode: AuthMode) {
     setFormError(null);
-    if (nextMode === mode) return;
-    setMode(nextMode);
+    setVerification(false);
+    setVerificationStatus(null);
+    setCaptchaValue({ token: "", answer: "", isFilled: false });
     setTurnstileToken("");
+    if (nextMode === mode) {
+      setCaptchaRefreshTrigger((prev) => prev + 1);
+      return;
+    }
+    setMode(nextMode);
     setCaptchaRefreshTrigger((prev) => prev + 1);
   }
 
@@ -60,8 +69,8 @@ export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalPro
     setSubmitting(true);
     try {
       const telemetry = getTelemetry();
-      const response = await mutateJson<AuthResponse>(`/api/auth/${mode === "register" ? "register" : "login"}`, {
-        ...(mode === "register" ? { displayName: displayName.trim() } : {}),
+      const payload = {
+        ...(mode === "register" && !verification ? { displayName: displayName.trim() } : {}),
         email: email.trim(),
         password,
         website: honeypotRef.current?.value ?? "",
@@ -69,12 +78,33 @@ export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalPro
         captchaToken: captchaValue.token,
         captchaAnswer: captchaValue.answer,
         telemetry,
-      });
-      auth.acceptUser(response.user);
-      setPassword("");
-      onClose();
+      };
+      if (verification) {
+        const response = await mutateJson<VerificationResponse>("/api/auth/verification", payload);
+        setVerificationStatus(response.alreadyVerified ? "verified" : "sent");
+        setCaptchaRefreshTrigger((prev) => prev + 1);
+      } else {
+        const response = await mutateJson<AuthResponse>(`/api/auth/${mode === "register" ? "register" : "login"}`, payload);
+        if ("verificationRequired" in response) {
+          setEmail(response.email);
+          setPassword("");
+          setVerification(true);
+          setVerificationStatus(null);
+          setCaptchaValue({ token: "", answer: "", isFilled: false });
+        } else {
+          auth.acceptUser(response.user);
+          setPassword("");
+          onClose();
+        }
+      }
     } catch (error) {
-      setFormError(error instanceof ApiError ? error.message : "No se pudo conectar. Revisa tu conexión e inténtalo de nuevo.");
+      if (!verification && error instanceof ApiError && error.code === "EMAIL_NOT_VERIFIED") {
+        setVerification(true);
+        setVerificationStatus(null);
+        setCaptchaValue({ token: "", answer: "", isFilled: false });
+      } else {
+        setFormError(error instanceof ApiError ? error.message : "No se pudo conectar. Revisa tu conexión e inténtalo de nuevo.");
+      }
       setCaptchaRefreshTrigger((prev) => prev + 1);
     } finally {
       setTurnstileToken("");
@@ -91,7 +121,7 @@ export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalPro
 
   return (
     <Dialog open={open} onClose={onClose} title={title} eyebrow="O-MEI-SYU-SAMA · CLUB DE FANS" className="auth-dialog">
-      <div className="auth-tabs" role="tablist" aria-label="Acceso a la comunidad">
+      {!verification && <div className="auth-tabs" role="tablist" aria-label="Acceso a la comunidad">
         <button
           type="button"
           role="tab"
@@ -110,9 +140,9 @@ export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalPro
         >
           Crear cuenta
         </button>
-      </div>
+      </div>}
 
-      <p className="auth-intro">Un rincón hecho por fans, para fans. Esta comunidad escolar no está afiliada oficialmente a BAND-MAID.</p>
+      {!verification && <p className="auth-intro">Un rincón hecho por fans, para fans. Esta comunidad escolar no está afiliada oficialmente a BAND-MAID.</p>}
 
       {auth.loading && <p className="auth-loading-message" role="status">Comprobando la conexión segura…</p>}
       {auth.configured === false && process.env.NODE_ENV === "production" && (
@@ -134,8 +164,19 @@ export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalPro
         </div>
       )}
 
-      <form className="auth-form" onSubmit={handleSubmit}>
-        {mode === "register" && (
+      {verification && (
+        <div className="verification-panel" role="status">
+          {verificationStatus === "verified" ? (
+            <p>Tu correo <strong>{email}</strong> ya está verificado. Ahora puedes iniciar sesión.</p>
+          ) : (
+            <p>Revisa el correo enviado a <strong>{email}</strong> y abre el enlace para verificar tu cuenta. {verificationStatus === "sent" && "Te enviamos un nuevo enlace."}</p>
+          )}
+          <button type="button" className="text-action" onClick={() => selectMode("login")}>Volver a iniciar sesión</button>
+        </div>
+      )}
+
+      {verificationStatus !== "verified" && <form className="auth-form" onSubmit={handleSubmit}>
+        {mode === "register" && !verification && (
           <label className="field-label" htmlFor={displayNameId}>
             Nombre para mostrar
             <span className="input-wrap">
@@ -154,7 +195,7 @@ export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalPro
             </span>
           </label>
         )}
-        <label className="field-label" htmlFor={emailId}>
+        {!verification && <label className="field-label" htmlFor={emailId}>
           Correo electrónico
           <input
             id={emailId}
@@ -168,7 +209,7 @@ export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalPro
             required
             disabled={submitting}
           />
-        </label>
+        </label>}
         <label className="field-label" htmlFor={passwordId}>
           Contraseña
           <span className="password-wrap">
@@ -179,8 +220,8 @@ export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalPro
               name="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              autoComplete={mode === "register" ? "new-password" : "current-password"}
-              minLength={mode === "register" ? 8 : 1}
+              autoComplete={mode === "register" && !verification ? "new-password" : "current-password"}
+              minLength={mode === "register" && !verification ? 8 : 1}
               maxLength={128}
               required
               disabled={submitting}
@@ -209,7 +250,7 @@ export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalPro
         <div className="auth-challenge-section">
           {open && (
             <TextCaptcha
-              key={mode}
+              key={verification ? "verification" : mode}
               onChange={setCaptchaValue}
               disabled={submitting}
               refreshTrigger={captchaRefreshTrigger}
@@ -217,7 +258,7 @@ export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalPro
           )}
           {infrastructureReady && (
             <div className="turnstile-space">
-              {open && <Turnstile key={`${mode}-${turnstileAttempt}`} action={mode} onToken={setTurnstileToken} />}
+              {open && <Turnstile key={`${verification ? "verification" : mode}-${turnstileAttempt}`} action={verification ? "login" : mode} onToken={setTurnstileToken} />}
             </div>
           )}
         </div>
@@ -229,10 +270,10 @@ export function AuthModal({ open, onClose, initialMode = "login" }: AuthModalPro
           type="submit"
           disabled={isSubmitDisabled}
         >
-          {submitting ? "Un momento…" : mode === "register" ? "Crear mi cuenta" : "Entrar a la comunidad"}
+          {submitting ? "Un momento…" : verification ? "Reenviar correo de verificación" : mode === "register" ? "Crear mi cuenta" : "Entrar a la comunidad"}
         </button>
-        <p className="form-footnote">Tu cuenta es solo para esta comunidad de fans.</p>
-      </form>
+        {!verification && <p className="form-footnote">Tu cuenta es solo para esta comunidad de fans.</p>}
+      </form>}
     </Dialog>
   );
 }

@@ -277,6 +277,9 @@ img { max-width: 100%; }
 .auth-tab::after { position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; transform: scaleX(0); background: var(--gold); content: ""; }
 .auth-tab.active { color: #ffffff; }
 .auth-tab.active::after { transform: scaleX(1); }
+.verification-panel { display: grid; gap: 10px; margin: 16px 0; padding: 14px; border: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.5; }
+.verification-panel strong { color: #fff; overflow-wrap: anywhere; }
+.verification-panel .text-action { justify-self: start; }
 .auth-intro { margin: 13px 0 17px; color: var(--muted); font-size: 11px; }
 .auth-loading-message { margin: -5px 0 13px; color: var(--muted); font-size: 10px; }
 .auth-form, .create-post-form { display: grid; gap: 14px; }
